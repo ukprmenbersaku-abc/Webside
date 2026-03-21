@@ -37,8 +37,9 @@ const App: React.FC = () => {
   ]);
   const [activePageId, setActivePageId] = useState<string>(INITIAL_PAGE_ID);
   
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeGuides, setActiveGuides] = useState<{type: 'x' | 'y', pos: number}[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const activeGuides = useRef<{type: 'x' | 'y', pos: number}[]>([]);
+  const [, forceUpdate] = useState({});
   
   // Viewport State
   const [zoom, setZoom] = useState(0.5);
@@ -79,8 +80,8 @@ const App: React.FC = () => {
       const minY = margin - canvasScreenH;
       const maxY = clientHeight - margin;
       return {
-          x: Math.min(Math.max(x, minX), maxX),
-          y: Math.min(Math.max(y, minY), maxY)
+          x: Math.round(Math.min(Math.max(x, minX), maxX)),
+          y: Math.round(Math.min(Math.max(y, minY), maxY))
       };
   }, []);
 
@@ -186,26 +187,26 @@ const App: React.FC = () => {
     }
 
     updateElements([...elements, newElement]);
-    setSelectedId(id);
+    setSelectedIds([id]);
   };
 
-  const handleUpdateElement = useCallback((id: string, updates: Partial<EditorElement>) => {
+  const handleUpdateElements = useCallback((ids: string[], updates: Partial<EditorElement>) => {
     setPages(currentPages => {
         const updatedPages = currentPages.map(page => {
             if (page.id !== activePageId) return page;
             return {
                 ...page,
-                elements: page.elements.map(el => el.id === id ? { ...el, ...updates, style: { ...el.style, ...updates.style } } : el)
+                elements: page.elements.map(el => ids.includes(el.id) ? { ...el, ...updates, style: { ...el.style, ...updates.style } } : el)
             };
         });
         return updatedPages;
     });
   }, [activePageId]);
 
-  const handleUpdateElementWithHistory = (id: string, updates: Partial<EditorElement>) => {
+  const handleUpdateElementsWithHistory = (ids: string[], updates: Partial<EditorElement>) => {
       const newPages = pages.map(p => p.id === activePageId ? {
           ...p,
-          elements: p.elements.map(el => el.id === id ? { ...el, ...updates, style: { ...el.style, ...updates.style } } : el)
+          elements: p.elements.map(el => ids.includes(el.id) ? { ...el, ...updates, style: { ...el.style, ...updates.style } } : el)
       } : p);
       setPages(newPages);
       saveHistory(newPages);
@@ -214,6 +215,9 @@ const App: React.FC = () => {
   const handleDragMove = useCallback((id: string, x: number, y: number) => {
     const el = elements.find(e => e.id === id);
     if (!el) return { x, y };
+
+    const dx = x - el.x;
+    const dy = y - el.y;
 
     const SNAP_THRESHOLD = 5;
     const guides: {type: 'x' | 'y', pos: number}[] = [];
@@ -248,7 +252,7 @@ const App: React.FC = () => {
     const yTargets = [0, CANVAS_HEIGHT / 2, CANVAS_HEIGHT];
 
     elements.forEach(other => {
-        if (other.id === id) return;
+        if (selectedIds.includes(other.id)) return;
         const otherBounds = getBounds(other, other.x, other.y);
         xTargets.push(otherBounds.left, otherBounds.centerX, otherBounds.right);
         yTargets.push(otherBounds.top, otherBounds.centerY, otherBounds.bottom);
@@ -295,26 +299,45 @@ const App: React.FC = () => {
         if (ySnapped) break;
     }
 
-    setActiveGuides(guides);
-    handleUpdateElement(id, { x: snappedX, y: snappedY });
+    activeGuides.current = guides;
+    
+    // Move all selected elements
+    const finalDx = snappedX - el.x;
+    const finalDy = snappedY - el.y;
+
+    setPages(currentPages => {
+        return currentPages.map(page => {
+            if (page.id !== activePageId) return page;
+            return {
+                ...page,
+                elements: page.elements.map(e => {
+                    if (selectedIds.includes(e.id)) {
+                        return { ...e, x: e.x + finalDx, y: e.y + finalDy };
+                    }
+                    return e;
+                })
+            };
+        });
+    });
+    forceUpdate({});
     return { x: snappedX, y: snappedY };
-  }, [elements, handleUpdateElement]);
+  }, [elements, activePageId, selectedIds]);
 
   const handleDragEnd = useCallback(() => {
-    setActiveGuides([]);
+    activeGuides.current = [];
     saveHistory(pages);
   }, [pages]);
 
-  const handleDeleteElement = useCallback((id: string) => {
+  const handleDeleteElements = useCallback((ids: string[]) => {
     setPages(currentPages => {
         const newPages = currentPages.map(p => {
              if (p.id !== activePageId) return p;
-             return { ...p, elements: p.elements.filter(el => el.id !== id) };
+             return { ...p, elements: p.elements.filter(el => !ids.includes(el.id)) };
         });
         saveHistory(newPages);
         return newPages;
     });
-    setSelectedId(null);
+    setSelectedIds([]);
   }, [activePageId]);
 
   // Global Keyboard Shortcuts
@@ -331,9 +354,9 @@ const App: React.FC = () => {
       }
 
       if (e.key === 'Backspace' || e.key === 'Delete') {
-          if (selectedId) {
+          if (selectedIds.length > 0) {
               e.preventDefault();
-              handleDeleteElement(selectedId);
+              handleDeleteElements(selectedIds);
           }
       }
     };
@@ -348,19 +371,20 @@ const App: React.FC = () => {
        window.removeEventListener('keydown', handleKeyDown);
        window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [selectedId, handleDeleteElement]);
+  }, [selectedIds, handleDeleteElements]);
 
 
-  const handleDuplicateElement = (element: EditorElement) => {
-    const newElement = {
-        ...element,
-        id: Date.now().toString(),
-        x: element.x + 20,
-        y: element.y + 20,
-        menuItems: element.menuItems ? [...element.menuItems] : undefined
-    };
-    updateElements([...elements, newElement]);
-    setSelectedId(newElement.id);
+  const handleDuplicateElements = (ids: string[]) => {
+    const selectedElements = elements.filter(el => ids.includes(el.id));
+    const newElements = selectedElements.map(el => ({
+        ...el,
+        id: Date.now().toString() + Math.random(),
+        x: el.x + 20,
+        y: el.y + 20,
+        menuItems: el.menuItems ? [...el.menuItems] : undefined
+    }));
+    updateElements([...elements, ...newElements]);
+    setSelectedIds(newElements.map(el => el.id));
   };
 
   // --- Page Management ---
@@ -414,6 +438,78 @@ const App: React.FC = () => {
       }
   };
 
+  const handleAlignElements = (direction: 'horizontal' | 'vertical') => {
+    if (selectedIds.length < 2) return;
+    const selectedElements = elements.filter(el => selectedIds.includes(el.id));
+    
+    if (direction === 'horizontal') {
+        // Align to top of the bounding box
+        const minY = Math.min(...selectedElements.map(el => el.y));
+        handleUpdateElementsWithHistory(selectedIds, { y: minY });
+    } else {
+        // Align to left of the bounding box
+        const minX = Math.min(...selectedElements.map(el => el.x));
+        handleUpdateElementsWithHistory(selectedIds, { x: minX });
+    }
+  };
+
+  const handleDistributeElements = (direction: 'horizontal' | 'vertical') => {
+    if (selectedIds.length < 3) return;
+    const selectedElements = [...elements.filter(el => selectedIds.includes(el.id))];
+    
+    if (direction === 'horizontal') {
+        selectedElements.sort((a, b) => a.x - b.x);
+        const minX = selectedElements[0].x;
+        const maxX = selectedElements[selectedElements.length - 1].x;
+        const totalWidth = maxX - minX;
+        const step = totalWidth / (selectedElements.length - 1);
+        
+        const newPages = pages.map(p => p.id === activePageId ? {
+            ...p,
+            elements: p.elements.map(el => {
+                const index = selectedElements.findIndex(se => se.id === el.id);
+                if (index !== -1) {
+                    return { ...el, x: minX + index * step };
+                }
+                return el;
+            })
+        } : p);
+        setPages(newPages);
+        saveHistory(newPages);
+    } else {
+        selectedElements.sort((a, b) => a.y - b.y);
+        const minY = selectedElements[0].y;
+        const maxY = selectedElements[selectedElements.length - 1].y;
+        const totalHeight = maxY - minY;
+        const step = totalHeight / (selectedElements.length - 1);
+        
+        const newPages = pages.map(p => p.id === activePageId ? {
+            ...p,
+            elements: p.elements.map(el => {
+                const index = selectedElements.findIndex(se => se.id === el.id);
+                if (index !== -1) {
+                    return { ...el, y: minY + index * step };
+                }
+                return el;
+            })
+        } : p);
+        setPages(newPages);
+        saveHistory(newPages);
+    }
+  };
+
+  const handleSelectElement = (id: string | null, isShift: boolean = false) => {
+      if (!id) {
+          setSelectedIds([]);
+          return;
+      }
+      if (isShift) {
+          setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+      } else {
+          setSelectedIds([id]);
+      }
+  };
+
   const handleExport = async () => {
     await downloadBundle(pages);
   };
@@ -430,10 +526,10 @@ const App: React.FC = () => {
         const mouseY = e.clientY - rect.top;
         const worldX = (mouseX - pan.x) / zoom;
         const worldY = (mouseY - pan.y) / zoom;
-        const zoomDelta = -e.deltaY * 0.002;
-        const newZoom = Math.min(5, Math.max(0.1, zoom + zoomDelta));
-        const newPanX = mouseX - worldX * newZoom;
-        const newPanY = mouseY - worldY * newZoom;
+        const zoomFactor = Math.pow(0.996, e.deltaY);
+        const newZoom = Math.min(5, Math.max(0.1, zoom * zoomFactor));
+        const newPanX = Math.round(mouseX - worldX * newZoom);
+        const newPanY = Math.round(mouseY - worldY * newZoom);
         setZoom(newZoom);
         setPan(constrainPan(newPanX, newPanY, newZoom));
       } else {
@@ -487,17 +583,14 @@ const App: React.FC = () => {
       setPan(constrainPan(newPanX, newPanY, newZoom));
   };
 
-  const selectedElement = elements.find(el => el.id === selectedId) || null;
+  const selectedElement = elements.find(el => selectedIds.includes(el.id)) || null;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden text-slate-800 font-sans">
       <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0 z-20">
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-xl flex items-center justify-center text-white shadow-lg transform -rotate-3">
-              <span className="font-bold text-lg">W</span>
-            </div>
-            <h1 className="text-2xl tracking-tight hidden md:block font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600" style={{ fontFamily: "'Dancing Script', cursive" }}>
+            <h1 className="text-3xl tracking-tight hidden md:block font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600" style={{ fontFamily: "'Dancing Script', cursive" }}>
               Webside
             </h1>
           </div>
@@ -531,9 +624,9 @@ const App: React.FC = () => {
                 onPointerMove={handleWrapperPointerMove}
                 onPointerUp={handleWrapperPointerUp}
                 style={{ cursor: isSpacePressed ? 'grab' : isPanning ? 'grabbing' : 'default' }}
-                onClick={() => {
+                onClick={(e) => {
                     if (hasPanned.current) return;
-                    if (!isSpacePressed) setSelectedId(null);
+                    if (!isSpacePressed) handleSelectElement(null);
                 }}
             >
                 <div 
@@ -551,18 +644,18 @@ const App: React.FC = () => {
                         <CanvasElement 
                             key={el.id}
                             element={el}
-                            isSelected={el.id === selectedId}
-                            onSelect={setSelectedId}
-                            onUpdate={handleUpdateElementWithHistory}
+                            isSelected={selectedIds.includes(el.id)}
+                            onSelect={(id, isShift) => handleSelectElement(id, isShift)}
+                            onUpdate={handleUpdateElementsWithHistory}
                             onDragMove={handleDragMove}
                             onDragEnd={handleDragEnd}
                             zoom={zoom}
                             isSpacePressed={isSpacePressed}
                         />
                     ))}
-
+ 
                     {/* Smart Guides */}
-                    {activeGuides.map((guide, i) => (
+                    {activeGuides.current.map((guide, i) => (
                         <div 
                             key={i}
                             className="absolute bg-red-500 pointer-events-none z-[100]"
@@ -587,7 +680,7 @@ const App: React.FC = () => {
                                 e.preventDefault();
                                 setContextMenu({ x: e.clientX, y: e.clientY - 80, pageId: page.id });
                             }}
-                            onClick={() => { setActivePageId(page.id); setSelectedId(null); }}
+                            onClick={() => { setActivePageId(page.id); setSelectedIds([]); }}
                             onDoubleClick={() => startRenaming(page)}
                             className={`group relative h-full px-4 flex items-center gap-2 cursor-pointer text-xs font-medium border-t-2 border-x border-b-0 transition-colors rounded-t-sm min-w-[100px] max-w-[200px]
                                 ${activePageId === page.id 
@@ -672,10 +765,12 @@ const App: React.FC = () => {
         </div>
 
         <PropertiesPanel 
-            element={selectedElement} 
-            onUpdate={handleUpdateElementWithHistory}
-            onDelete={() => selectedId && handleDeleteElement(selectedId)}
-            onDuplicate={handleDuplicateElement}
+            elements={elements.filter(el => selectedIds.includes(el.id))} 
+            onUpdate={handleUpdateElementsWithHistory}
+            onDelete={() => selectedIds.length > 0 && handleDeleteElements(selectedIds)}
+            onDuplicate={() => handleDuplicateElements(selectedIds)}
+            onAlign={handleAlignElements}
+            onDistribute={handleDistributeElements}
             canvasWidth={CANVAS_WIDTH}
             canvasHeight={CANVAS_HEIGHT}
             pages={pages}

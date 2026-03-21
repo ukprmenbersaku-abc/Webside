@@ -40,6 +40,7 @@ export interface EditorElement {
     boxShadow?: string;
     gap?: number;
     padding?: number;
+    margin?: number;
     cursor?: 'auto' | 'pointer' | 'text' | 'move' | 'default';
   };
   src?: string;

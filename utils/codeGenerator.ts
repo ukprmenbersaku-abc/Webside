@@ -203,7 +203,7 @@ const generatePageHtml = async (page: Page, allPages: Page[], imgFolder: JSZip |
             href = el.link;
         }
 
-        if (href && el.type !== 'menubar' && el.type !== 'hamburger') {
+        if (href && el.type !== 'navigation') {
             return `<a id="${el.id}" href="${href}" class="${className}" style="${finalStyleString}; text-decoration: none;">${contentHtml}</a>`;
         }
 

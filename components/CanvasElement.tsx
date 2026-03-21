@@ -1,12 +1,12 @@
 import React, { useRef, useState } from 'react';
 import { EditorElement } from '../types';
-import { AlignJustify } from 'lucide-react';
+import { AlignJustify, Plus } from 'lucide-react';
 
 interface CanvasElementProps {
   element: EditorElement;
   isSelected: boolean;
-  onSelect: (id: string | null) => void;
-  onUpdate: (id: string, updates: Partial<EditorElement>) => void;
+  onSelect: (id: string | null, isShift: boolean) => void;
+  onUpdate: (ids: string[], updates: Partial<EditorElement>) => void;
   onDragMove?: (id: string, x: number, y: number) => { x: number, y: number };
   onDragEnd?: () => void;
   zoom: number;
@@ -15,6 +15,7 @@ interface CanvasElementProps {
 
 const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSelect, onUpdate, onDragMove, onDragEnd, zoom, isSpacePressed }) => {
   const elementRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   
   // Drag State
   const [isDragging, setIsDragging] = useState(false);
@@ -50,7 +51,7 @@ const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSe
 
     // If not selected, select immediately to allow seeing props/handles
     if (!isSelected) {
-        onSelect(element.id);
+        onSelect(element.id, e.shiftKey);
     }
     
     setIsDragging(true);
@@ -87,7 +88,7 @@ const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSe
           if (onDragMove) {
               onDragMove(element.id, Math.round(newX), Math.round(newY));
           } else {
-              onUpdate(element.id, {
+              onUpdate([element.id], {
                 x: Math.round(newX),
                 y: Math.round(newY)
               });
@@ -105,7 +106,7 @@ const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSe
 
       // Toggle off if it was a click on an already selected element
       if (!hasMoved.current && wasSelectedOnDown.current) {
-          onSelect(null);
+          onSelect(element.id, e.shiftKey);
       }
     }
   };
@@ -136,32 +137,38 @@ const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSe
     let newX = initialSize.x;
     let newY = initialSize.y;
 
+    const padding = element.style.padding || 0;
+    const minW = contentRef.current ? contentRef.current.scrollWidth + (padding * 2) : 20;
+    const minH = contentRef.current ? contentRef.current.scrollHeight + (padding * 2) : 20;
+
     if (resizeHandle?.includes('e')) {
-        newWidth = Math.max(20, initialSize.w + dx);
+        newWidth = Math.max(minW, initialSize.w + dx);
     }
     if (resizeHandle?.includes('s')) {
-        newHeight = Math.max(20, initialSize.h + dy);
+        newHeight = Math.max(minH, initialSize.h + dy);
     }
     if (resizeHandle?.includes('w')) {
-        const change = -dx;
-        newWidth = Math.max(20, initialSize.w + change);
+        const requestedWidth = initialSize.w - dx;
+        newWidth = Math.max(minW, requestedWidth);
+        const actualChange = newWidth - initialSize.w;
         if (element.anchorX === 'left') {
-             newX = initialSize.x - change;
-        } else {
-             newX = initialSize.x - (change / 2);
+             newX = initialSize.x - actualChange;
+        } else if (element.anchorX === 'center') {
+             newX = initialSize.x - (actualChange / 2);
         }
     }
     if (resizeHandle?.includes('n')) {
-        const change = -dy;
-        newHeight = Math.max(20, initialSize.h + change);
+        const requestedHeight = initialSize.h - dy;
+        newHeight = Math.max(minH, requestedHeight);
+        const actualChange = newHeight - initialSize.h;
         if (element.anchorY === 'top') {
-             newY = initialSize.y - change;
+             newY = initialSize.y - actualChange;
         } else if (element.anchorY === 'center') {
-             newY = initialSize.y - (change / 2);
+             newY = initialSize.y - (actualChange / 2);
         }
     }
 
-    onUpdate(element.id, {
+    onUpdate([element.id], {
         width: Math.round(newWidth),
         height: Math.round(newHeight),
         x: Math.round(newX),
@@ -211,8 +218,15 @@ const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSe
     bottom: element.anchorY === 'bottom' ? `${element.y}px` : undefined,
     
     transform: finalTransform,
-    marginLeft: element.anchorX === 'center' ? `${element.x}px` : undefined,
-    marginTop: element.anchorY === 'center' ? `${element.y}px` : undefined,
+    boxSizing: 'border-box',
+    marginLeft: element.anchorX === 'center' 
+      ? `${element.x + (element.style.margin || 0)}px` 
+      : (element.style.margin ? `${element.style.margin}px` : undefined),
+    marginTop: element.anchorY === 'center' 
+      ? `${element.y + (element.style.margin || 0)}px` 
+      : (element.style.margin ? `${element.style.margin}px` : undefined),
+    marginRight: element.style.margin ? `${element.style.margin}px` : undefined,
+    marginBottom: element.style.margin ? `${element.style.margin}px` : undefined,
 
     backgroundColor: element.style.backgroundColor,
     color: element.style.color,
@@ -231,6 +245,8 @@ const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSe
     zIndex: element.style.zIndex,
     boxShadow: finalBoxShadow,
     
+    padding: element.style.padding !== undefined ? `${element.style.padding}px` : undefined,
+    
     display: 'flex',
     alignItems: element.type === 'text' ? 'flex-start' : 'center',
     justifyContent: element.type === 'text' 
@@ -243,8 +259,8 @@ const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSe
     userSelect: 'none',
     pointerEvents: isSpacePressed ? 'none' : 'auto',
     
-    // Transition for smooth hover
-    transition: isDragging || isResizing ? 'none' : 'transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease',
+    // Transition for smooth hover (removed transform to prevent jitter during zoom)
+    transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease, opacity 0.2s ease',
   };
 
   const handleStyle = (pos: string) => {
@@ -317,13 +333,13 @@ const CanvasElement: React.FC<CanvasElementProps> = ({ element, isSelected, onSe
         )}
         
         {element.type === 'text' && (
-          <div className="w-full h-full p-2 break-words whitespace-pre-wrap pointer-events-none">
+          <div ref={contentRef} className="w-full h-full break-words whitespace-pre-wrap pointer-events-none" style={{ minWidth: 'max-content', minHeight: 'max-content', textAlign: element.style.textAlign }}>
             {element.content}
           </div>
         )}
 
         {(element.type === 'rectangle' || element.type === 'circle' || element.type === 'button') && (
-           <div className="w-full h-full p-2 break-words whitespace-pre-wrap pointer-events-none flex items-center justify-center">
+           <div ref={contentRef} className="w-full h-full break-words whitespace-pre-wrap pointer-events-none flex items-center justify-center" style={{ minWidth: 'max-content', minHeight: 'max-content', textAlign: element.style.textAlign }}>
              {element.content}
            </div>
         )}
