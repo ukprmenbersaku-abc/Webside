@@ -5,9 +5,18 @@ import kissaBeansImg from '../src/assets/images/kissa_beans_ethiopia_17931844558
 import kissaHeroImg from '../src/assets/images/kissa_hero_pour_over_1793184454683.jpg';
 import saasWorkspaceImg from '../src/assets/images/saas_workspace_preview_1793184459557.jpg';
 import { EditorElement, Page, SiteTemplate } from '../types';
+import { TSUKIKAGE_RYOKAN_TEMPLATE } from './templateRyokanFlagship';
+import { TEMPLATES_PART_1 } from './templatesPart1';
+import { TEMPLATES_PART_2 } from './templatesPart2';
 
 export function cloneTemplatePages(template: SiteTemplate, idSuffix?: string): Page[] {
   const suffix = idSuffix ? `-${idSuffix}` : '';
+  const pageIds = new Set(template.pages.map((p) => p.id));
+  const pageSlugs = new Set(template.pages.map((p) => p.slug).filter(Boolean));
+  const allHtmlIds = new Set(
+    template.pages.flatMap((p) => p.elements.map((e) => e.htmlId).filter(Boolean))
+  );
+
   return template.pages.map((page) => ({
     ...page,
     id: `${page.id}${suffix}`,
@@ -16,8 +25,23 @@ export function cloneTemplatePages(template: SiteTemplate, idSuffix?: string): P
       ...el,
       id: `${el.id}${suffix}`,
       htmlId: el.htmlId ? `${el.htmlId}${suffix}` : undefined,
+      link:
+        el.linkType === 'page' && el.link && suffix && pageIds.has(el.link)
+          ? `${el.link}${suffix}`
+          : el.link,
       style: { ...el.style },
-      menuItems: el.menuItems ? el.menuItems.map((m) => ({ ...m })) : undefined,
+      menuItems: el.menuItems
+        ? el.menuItems.map((m) => {
+            if (!suffix || !m.link || !m.link.startsWith('#')) {
+              return { ...m };
+            }
+            const targetKey = m.link.slice(1);
+            if (pageIds.has(targetKey) || pageSlugs.has(targetKey) || allHtmlIds.has(targetKey)) {
+              return { ...m, link: `#${targetKey}${suffix}` };
+            }
+            return { ...m };
+          })
+        : undefined,
       interaction: el.interaction
         ? {
             ...el.interaction,
@@ -32,6 +56,11 @@ export function cloneTemplatePages(template: SiteTemplate, idSuffix?: string): P
 }
 
 export const SITE_TEMPLATES: SiteTemplate[] = [
+  // =========================================================================
+  // 0. TSUKIKAGE RYOKAN — 全7ページ長編・奥箱根湯宿フラッグシップ (Default Showcase)
+  // =========================================================================
+  TSUKIKAGE_RYOKAN_TEMPLATE,
+
   // =========================================================================
   // 1. KISSA & ROAST — 京都・自家焙煎珈琲店 (Editorial Warm Washi)
   // =========================================================================
@@ -1934,8 +1963,11 @@ export const SITE_TEMPLATES: SiteTemplate[] = [
     ],
   },
 
+  ...TEMPLATES_PART_1,
+  ...TEMPLATES_PART_2,
+
   // =========================================================================
-  // 5. MINIMAL BLANK — ミニマル初期構成 (Clean Starter)
+  // 15. MINIMAL BLANK — ミニマル初期構成 (Clean Starter)
   // =========================================================================
   {
     id: 'minimal-blank',

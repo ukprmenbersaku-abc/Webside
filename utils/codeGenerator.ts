@@ -126,15 +126,26 @@ function resolveLinkHref(el: EditorElement, allPages: Page[]): string {
   return el.link;
 }
 
-function resolveMenuLinkHref(rawLink: string, allPages: Page[]): string {
+function resolveMenuLinkHref(
+  rawLink: string,
+  allPages: Page[],
+  currentPageId?: string
+): string {
   if (!rawLink) return '#';
   const cleaned = rawLink.startsWith('#') ? rawLink.slice(1) : rawLink;
-  if (cleaned === 'home' && allPages.length > 0) {
-    return '#';
-  }
   const matchedPage = allPages.find((p) => p.id === cleaned || p.slug === cleaned);
   if (matchedPage) {
+    if (currentPageId && matchedPage.id === currentPageId) {
+      return '#';
+    }
     return `./${getPageFilename(matchedPage, allPages)}`;
+  }
+  if (cleaned === 'home' && allPages.length > 0) {
+    const homePage = allPages[0];
+    if (!currentPageId || homePage.id === currentPageId) {
+      return '#';
+    }
+    return `./${getPageFilename(homePage, allPages)}`;
   }
   return rawLink;
 }
@@ -722,7 +733,8 @@ function buildElementHtmlMarkup(
   el: EditorElement,
   selectorId: string,
   allPages: Page[],
-  resolvedImageSrc?: string
+  resolvedImageSrc?: string,
+  currentPageId?: string
 ): string {
   const userClasses = sanitizeClassNames(el.className);
   const classAttr = userClasses ? ` class="${userClasses}"` : '';
@@ -769,13 +781,13 @@ function buildElementHtmlMarkup(
       const leftList = leftItems
         .map(
           (item) =>
-            `        <li><a href="${escapeHtml(resolveMenuLinkHref(item.link, allPages))}" class="nav-link">${escapeHtml(item.label)}</a></li>`
+            `        <li><a href="${escapeHtml(resolveMenuLinkHref(item.link, allPages, currentPageId))}" class="nav-link">${escapeHtml(item.label)}</a></li>`
         )
         .join('\n');
       const rightList = rightItems
         .map(
           (item) =>
-            `        <li><a href="${escapeHtml(resolveMenuLinkHref(item.link, allPages))}" class="nav-link">${escapeHtml(item.label)}</a></li>`
+            `        <li><a href="${escapeHtml(resolveMenuLinkHref(item.link, allPages, currentPageId))}" class="nav-link">${escapeHtml(item.label)}</a></li>`
         )
         .join('\n');
 
@@ -799,7 +811,7 @@ function buildElementHtmlMarkup(
     const listMarkup = (el.menuItems || [])
       .map(
         (item) =>
-          `        <li><a href="${escapeHtml(resolveMenuLinkHref(item.link, allPages))}" class="drawer-link">${escapeHtml(item.label)}</a></li>`
+          `        <li><a href="${escapeHtml(resolveMenuLinkHref(item.link, allPages, currentPageId))}" class="drawer-link">${escapeHtml(item.label)}</a></li>`
       )
       .join('\n');
 
@@ -1280,7 +1292,9 @@ img, svg {
         }
       }
 
-      pageElementMarkups.push(buildElementHtmlMarkup(el, selectorId, pages, resolvedImgSrc));
+      pageElementMarkups.push(
+        buildElementHtmlMarkup(el, selectorId, pages, resolvedImgSrc, page.id)
+      );
       pageCssRules.push(buildElementCssRules(el, selectorId, canvasWidth));
 
       const mobileMeta = mobileLayoutMap.get(el.id);

@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlignJustify, ImageOff, Lock, Plus } from 'lucide-react';
-import { EditorElement } from '../types';
+import { AlignJustify, ArrowRight, ImageOff, Lock, Plus } from 'lucide-react';
+import { EditorElement, Page } from '../types';
 import {
   buildCssFilterString,
   formatCssBoxShorthand,
@@ -40,6 +40,7 @@ interface CanvasElementProps {
   onCancelInlineEdit?: () => void;
   onTriggerInteraction?: (element: EditorElement, eventType: 'click' | 'dblclick' | 'mouseenter') => void;
   onNavigatePage?: (pageId: string) => void;
+  pages?: Page[];
   zoom: number;
   isSpacePressed?: boolean;
 }
@@ -61,6 +62,7 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
   onCancelInlineEdit,
   onTriggerInteraction,
   onNavigatePage,
+  pages,
   zoom,
   isSpacePressed,
 }) => {
@@ -846,37 +848,59 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
       )}
 
       {/* Selected Human Role Badge */}
-      {!isPreviewMode && isSelected && (
-        <div
-          className="pointer-events-none flex items-center gap-1.5"
-          style={{
-            position: 'absolute',
-            top: -(borderSides.top + (hasMargin ? margin.top : 0) + 23),
-            left: -(borderSides.left + (hasMargin ? margin.left : 0)),
-            backgroundColor: '#0f172a',
-            color: '#f8fafc',
-            fontSize: 10,
-            lineHeight: '17px',
-            padding: '1px 7px',
-            borderRadius: 3,
-            whiteSpace: 'nowrap',
-            writingMode: 'horizontal-tb',
-            zIndex: 65,
-          }}
-        >
-          {isLocked && <Lock size={9} className="text-amber-400" />}
-          <span className="font-medium text-slate-100">{humanSummary.kindLabel}</span>
-          {element.htmlId && !/^el-\d/.test(element.htmlId) && (
-            <>
-              <span className="text-slate-500">·</span>
-              <span className="font-mono text-indigo-300">#{selectorId}</span>
-            </>
-          )}
-          {element.hiddenByDefault && (
-            <span className="text-amber-300">· 初期非表示</span>
-          )}
-        </div>
-      )}
+      {!isPreviewMode && isSelected && (() => {
+        const linkedPage =
+          element.linkType === 'page' && element.link
+            ? pages?.find((p) => p.id === element.link || p.slug === element.link)
+            : undefined;
+
+        return (
+          <div
+            className="pointer-events-none flex items-center gap-1.5"
+            style={{
+              position: 'absolute',
+              top: -(borderSides.top + (hasMargin ? margin.top : 0) + 24),
+              left: -(borderSides.left + (hasMargin ? margin.left : 0)),
+              backgroundColor: '#0f172a',
+              color: '#f8fafc',
+              fontSize: 10,
+              lineHeight: '18px',
+              padding: '1px 7px',
+              borderRadius: 3,
+              whiteSpace: 'nowrap',
+              writingMode: 'horizontal-tb',
+              zIndex: 65,
+            }}
+          >
+            {isLocked && <Lock size={9} className="text-amber-400" />}
+            <span className="font-medium text-slate-100">{humanSummary.kindLabel}</span>
+            {element.htmlId && !/^el-\d/.test(element.htmlId) && (
+              <>
+                <span className="text-slate-500">·</span>
+                <span className="font-mono text-indigo-300">#{selectorId}</span>
+              </>
+            )}
+            {element.hiddenByDefault && (
+              <span className="text-amber-300">· 初期非表示</span>
+            )}
+            {linkedPage && onNavigatePage && (
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNavigatePage(linkedPage.id);
+                }}
+                className="pointer-events-auto ml-1 px-1.5 py-0.5 rounded-xs bg-indigo-600 hover:bg-indigo-500 text-white font-medium flex items-center gap-0.5 transition-colors cursor-pointer"
+                title={`クリックして「${linkedPage.name}」の編集画面へ移動`}
+              >
+                <span>遷移先: {linkedPage.name}</span>
+                <ArrowRight size={9} />
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Hidden Unscaled Natural Height Probe for Auto-Height & Reflow */}
       {!isPreviewMode && autoHeightEnabled && (

@@ -69,6 +69,7 @@ interface PropertiesPanelProps {
   canvasHeight: number;
   pages: Page[];
   onEnterPreview?: () => void;
+  onSwitchPage?: (pageId: string) => void;
 }
 
 type PageTab = 'page' | 'layers';
@@ -211,6 +212,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   canvasHeight,
   pages,
   onEnterPreview,
+  onSwitchPage,
 }) => {
   const element = elements.length > 0 ? elements[0] : null;
   const selectedIds = elements.map((el) => el.id);
@@ -2692,21 +2694,33 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   </div>
 
                   {activeLinkMode === 'page' && (
-                    <div>
-                      <span className="text-[11px] text-slate-500 block mb-1">移動先のページ</span>
-                      <select
-                        value={element.link || ''}
-                        onChange={(e) =>
-                          onUpdate(selectedIds, { linkType: 'page', link: e.target.value })
-                        }
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white"
-                      >
-                        {pages.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
+                    <div className="space-y-2">
+                      <div>
+                        <span className="text-[11px] text-slate-500 block mb-1">移動先のページ</span>
+                        <select
+                          value={element.link || ''}
+                          onChange={(e) =>
+                            onUpdate(selectedIds, { linkType: 'page', link: e.target.value })
+                          }
+                          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white"
+                        >
+                          {pages.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {onSwitchPage && element.link && (
+                        <button
+                          type="button"
+                          onClick={() => onSwitchPage(element.link!)}
+                          className="w-full py-1.5 px-3 rounded-lg bg-indigo-50 hover:bg-indigo-100/80 border border-indigo-200 text-indigo-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                        >
+                          <span>移動先のページを開いて編集する</span>
+                          <ArrowRight size={12} />
+                        </button>
+                      )}
                     </div>
                   )}
 

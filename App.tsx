@@ -1068,6 +1068,19 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSwitchPage = useCallback(
+    (targetPageKey: string) => {
+      const target = pages.find((p) => p.id === targetPageKey || p.slug === targetPageKey);
+      if (!target) return;
+      setActivePageId(target.id);
+      setSelectedIds([]);
+      if (!isPreviewMode) {
+        fitCanvasToViewport(target.height || DEFAULT_CANVAS_HEIGHT, true);
+      }
+    },
+    [pages, isPreviewMode, fitCanvasToViewport]
+  );
+
   const handleSelectElement = (id: string | null, isShift: boolean = false) => {
     if (!id) {
       setSelectedIds([]);
@@ -1433,8 +1446,22 @@ const App: React.FC = () => {
                     <PenTool size={12} />
                     <span>編集画面に戻る</span>
                   </button>
-                  <span className="text-xs text-slate-500 truncate hidden md:inline">
-                    実際のブラウザ・スマホでの見え方やボタンの動きをそのまま確認できます
+                  {pages.length > 1 && (
+                    <select
+                      value={activePage.id}
+                      onChange={(e) => setActivePageId(e.target.value)}
+                      className="px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 max-w-[220px]"
+                      title="表示するページを切り替え"
+                    >
+                      {pages.map((p, idx) => (
+                        <option key={p.id} value={p.id}>
+                          {idx + 1}/{pages.length}：{p.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <span className="text-xs text-slate-500 truncate hidden lg:inline">
+                    ページ遷移ボタンやメニューをクリックして実際の動きを確認できます
                   </span>
                 </div>
 
@@ -1598,6 +1625,8 @@ const App: React.FC = () => {
                     onResizeEnd={handleResizeEnd}
                     onAutoHeightSync={handleAutoHeightSync}
                     onCancelInlineEdit={handleCancelInlineEdit}
+                    onNavigatePage={handleSwitchPage}
+                    pages={pages}
                     zoom={zoom}
                     isSpacePressed={isSpacePressed}
                   />
@@ -1656,8 +1685,11 @@ const App: React.FC = () => {
                     setContextMenu({ x: e.clientX, y: e.clientY - 84, pageId: page.id });
                   }}
                   onClick={() => {
-                    setActivePageId(page.id);
-                    setSelectedIds([]);
+                    if (activePageId !== page.id) {
+                      handleSwitchPage(page.id);
+                    } else {
+                      setSelectedIds([]);
+                    }
                   }}
                   onDoubleClick={() => !isPreviewMode && startRenaming(page)}
                   title="ダブルクリックでページ名を変更"
@@ -1883,6 +1915,7 @@ const App: React.FC = () => {
             canvasWidth={CANVAS_WIDTH}
             canvasHeight={pageHeight}
             pages={pages}
+            onSwitchPage={handleSwitchPage}
             onEnterPreview={() => {
               setIsPreviewMode(true);
               setSelectedIds([]);
