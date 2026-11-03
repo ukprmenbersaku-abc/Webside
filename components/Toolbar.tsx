@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   AlignJustify,
   Circle,
+  Film,
   Heading1,
   Image as ImageIcon,
   Menu,
@@ -9,6 +10,7 @@ import {
   MousePointerClick,
   Square,
   Type,
+  Volume2,
   X,
 } from 'lucide-react';
 import { ElementType } from '../types';
@@ -44,7 +46,36 @@ const Toolbar: React.FC<ToolbarProps> = ({ onAdd, disabled = false }) => {
       ],
     },
     {
-      groupLabel: 'パーツ',
+      groupLabel: 'メディア',
+      items: [
+        {
+          key: 'media-image',
+          type: 'media' as ElementType,
+          subType: 'image',
+          icon: <ImageIcon size={18} />,
+          label: '画像',
+          hint: '写真やイラスト・SVG図形を配置します (<img> / <svg>)',
+        },
+        {
+          key: 'media-video',
+          type: 'media' as ElementType,
+          subType: 'video',
+          icon: <Film size={18} />,
+          label: '動画',
+          hint: 'MP4/WebM動画やYouTube・Vimeo埋め込み動画を配置します (<video> / <iframe>)',
+        },
+        {
+          key: 'media-audio',
+          type: 'media' as ElementType,
+          subType: 'audio',
+          icon: <Volume2 size={18} />,
+          label: '音声',
+          hint: 'MP3/WAVなどの音楽・環境音プレイヤーを配置します (<audio>)',
+        },
+      ],
+    },
+    {
+      groupLabel: '操作',
       items: [
         {
           key: 'button',
@@ -52,13 +83,6 @@ const Toolbar: React.FC<ToolbarProps> = ({ onAdd, disabled = false }) => {
           icon: <MousePointerClick size={18} />,
           label: 'ボタン',
           hint: 'リンク移動やクリック開閉用のボタンを追加します (<button> / <a>)',
-        },
-        {
-          key: 'media',
-          type: 'media' as ElementType,
-          icon: <ImageIcon size={18} />,
-          label: '画像',
-          hint: '写真やイラスト・SVG図形を配置します (<img> / <svg>)',
         },
         {
           key: 'navigation',

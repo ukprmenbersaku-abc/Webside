@@ -100,7 +100,7 @@ const CodeModal: React.FC<CodeModalProps> = ({
                 自動生成されたWebコード（HTML / CSS / JavaScript）
               </h2>
               <p className="text-[11px] text-slate-500 truncate">
-                「サイトを書き出し」を押すと、画像も含めてそのまま公開・表示できる一式（ZIP）に自動でまとめられます
+                「サイトを書き出し」を押すと、画像・動画・音声ファイルも含めてそのまま公開できる一式（ZIP）に自動でまとめられます
               </p>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlignJustify, ArrowRight, ImageOff, Lock, Plus } from 'lucide-react';
+import { AlignJustify, ArrowRight, Film, ImageOff, Lock, Play, Plus, Volume2 } from 'lucide-react';
 import { EditorElement, Page } from '../types';
 import {
   buildCssFilterString,
@@ -15,6 +15,7 @@ import {
   isAutoHeightElement,
   sanitizeHtmlId,
 } from '../utils/boxModel';
+import { parseVideoEmbed } from '../utils/mediaUtils';
 
 interface ResizePatch {
   x: number;
@@ -73,15 +74,47 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
   const initialInlineContentRef = useRef<string>('');
 
   const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [initialOffset, setInitialOffset] = useState({ x: 0, y: 0 });
+  const dragSessionRef = useRef<{
+    active: boolean;
+    pointerId: number | null;
+    startX: number;
+    startY: number;
+    initialX: number;
+    initialY: number;
+  }>({
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    initialX: 0,
+    initialY: 0,
+  });
 
   const hasMoved = useRef(false);
   const wasSelectedOnDown = useRef(false);
 
   const [isResizing, setIsResizing] = useState(false);
-  const [resizeHandle, setResizeHandle] = useState<string | null>(null);
-  const [initialSize, setInitialSize] = useState({ w: 0, h: 0, x: 0, y: 0 });
+  const resizeSessionRef = useRef<{
+    active: boolean;
+    pointerId: number | null;
+    handle: string | null;
+    startX: number;
+    startY: number;
+    w: number;
+    h: number;
+    x: number;
+    y: number;
+  }>({
+    active: false,
+    pointerId: null,
+    handle: null,
+    startX: 0,
+    startY: 0,
+    w: 0,
+    h: 0,
+    x: 0,
+    y: 0,
+  });
 
   const [isHovered, setIsHovered] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -202,6 +235,27 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
   }
 
   // --- Dragging Logic ---
+  const finishDragSession = (targetEl?: EventTarget | null, pointerId?: number) => {
+    if (!dragSessionRef.current.active) return;
+    const pid = pointerId ?? dragSessionRef.current.pointerId;
+    dragSessionRef.current.active = false;
+    dragSessionRef.current.pointerId = null;
+    setIsDragging(false);
+
+    if (targetEl && pid !== null && pid !== undefined) {
+      try {
+        const htmlEl = targetEl as HTMLElement;
+        if (htmlEl.hasPointerCapture?.(pid)) {
+          htmlEl.releasePointerCapture(pid);
+        }
+      } catch {
+        // Ignore if already released
+      }
+    }
+
+    if (onDragEnd) onDragEnd();
+  };
+
   const handlePointerDown = (e: React.PointerEvent) => {
     if (isPreviewMode || isSpacePressed || isEditingText) return;
 
@@ -219,27 +273,43 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
       return;
     }
 
+    dragSessionRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      initialX: element.x,
+      initialY: element.y,
+    };
     setIsDragging(true);
-    setDragStart({ x: e.clientX, y: e.clientY });
-    setInitialOffset({ x: element.x, y: element.y });
 
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore synthetic pointer edge cases
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isDragging || isPreviewMode || isLocked) return;
+    const session = dragSessionRef.current;
+    if (!session.active || isPreviewMode || isLocked) return;
 
-    const dist = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
-    if (dist > 3) {
+    if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) {
+      finishDragSession(e.currentTarget, e.pointerId);
+      return;
+    }
+
+    const dist = Math.hypot(e.clientX - session.startX, e.clientY - session.startY);
+    if (dist > 2) {
       hasMoved.current = true;
     }
 
     if (hasMoved.current) {
-      const dx = (e.clientX - dragStart.x) / zoom;
-      const dy = (e.clientY - dragStart.y) / zoom;
+      const dx = (e.clientX - session.startX) / zoom;
+      const dy = (e.clientY - session.startY) / zoom;
 
-      let newX = initialOffset.x;
-      let newY = initialOffset.y;
+      let newX = session.initialX;
+      let newY = session.initialY;
 
       if (element.anchorX === 'left') newX += dx;
       else if (element.anchorX === 'right') newX -= dx;
@@ -261,46 +331,81 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    if (isDragging) {
-      setIsDragging(false);
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {
-        // Ignore if already released
-      }
+    if (dragSessionRef.current.active) {
+      const didMove = hasMoved.current;
+      const wasSelected = wasSelectedOnDown.current;
+      finishDragSession(e.currentTarget, e.pointerId);
 
-      if (onDragEnd) onDragEnd();
-
-      if (!hasMoved.current && wasSelectedOnDown.current && e.shiftKey) {
+      if (!didMove && wasSelected && e.shiftKey) {
         onSelect(element.id, true);
       }
     }
   };
 
   // --- Resizing Logic ---
+  const finishResizeSession = (targetEl?: EventTarget | null, pointerId?: number) => {
+    if (!resizeSessionRef.current.active) return;
+    const pid = pointerId ?? resizeSessionRef.current.pointerId;
+    resizeSessionRef.current.active = false;
+    resizeSessionRef.current.pointerId = null;
+    resizeSessionRef.current.handle = null;
+    setIsResizing(false);
+
+    if (targetEl && pid !== null && pid !== undefined) {
+      try {
+        const htmlEl = targetEl as HTMLElement;
+        if (htmlEl.hasPointerCapture?.(pid)) {
+          htmlEl.releasePointerCapture(pid);
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (onResizeEnd) onResizeEnd();
+  };
+
   const handleResizeStart = (e: React.PointerEvent, handle: string) => {
     if (isPreviewMode || isSpacePressed || isLocked) return;
 
     e.stopPropagation();
     e.preventDefault();
+    resizeSessionRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      handle,
+      startX: e.clientX,
+      startY: e.clientY,
+      w: element.width,
+      h: element.height,
+      x: element.x,
+      y: element.y,
+    };
     setIsResizing(true);
-    setResizeHandle(handle);
-    setDragStart({ x: e.clientX, y: e.clientY });
-    setInitialSize({ w: element.width, h: element.height, x: element.x, y: element.y });
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore
+    }
   };
 
   const handleResizeMove = (e: React.PointerEvent) => {
-    if (!isResizing || !resizeHandle) return;
+    const rSession = resizeSessionRef.current;
+    if (!rSession.active || !rSession.handle) return;
     e.stopPropagation();
 
-    const dx = (e.clientX - dragStart.x) / zoom;
-    const dy = (e.clientY - dragStart.y) / zoom;
+    if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) {
+      finishResizeSession(e.currentTarget, e.pointerId);
+      return;
+    }
 
-    let newWidth = initialSize.w;
-    let newHeight = initialSize.h;
-    let newX = initialSize.x;
-    let newY = initialSize.y;
+    const dx = (e.clientX - rSession.startX) / zoom;
+    const dy = (e.clientY - rSession.startY) / zoom;
+
+    let newWidth = rSession.w;
+    let newHeight = rSession.h;
+    let newX = rSession.x;
+    let newY = rSession.y;
 
     const isEmptyBoxOrDivider =
       element.type === 'divider' ||
@@ -325,42 +430,42 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
       ? Math.max(1, extraH)
       : Math.max(20, extraH + 16, naturalMeasuredH);
 
-    if (resizeHandle.includes('e')) {
-      newWidth = Math.max(minW, initialSize.w + dx);
-      const actualChange = newWidth - initialSize.w;
+    if (rSession.handle.includes('e')) {
+      newWidth = Math.max(minW, rSession.w + dx);
+      const actualChange = newWidth - rSession.w;
       if (element.anchorX === 'right') {
-        newX = initialSize.x - actualChange;
+        newX = rSession.x - actualChange;
       } else if (element.anchorX === 'center') {
-        newX = initialSize.x + actualChange / 2;
+        newX = rSession.x + actualChange / 2;
       }
     }
-    if (resizeHandle.includes('s')) {
-      newHeight = Math.max(minH, initialSize.h + dy);
-      const actualChange = newHeight - initialSize.h;
+    if (rSession.handle.includes('s')) {
+      newHeight = Math.max(minH, rSession.h + dy);
+      const actualChange = newHeight - rSession.h;
       if (element.anchorY === 'bottom') {
-        newY = initialSize.y - actualChange;
+        newY = rSession.y - actualChange;
       } else if (element.anchorY === 'center') {
-        newY = initialSize.y + actualChange / 2;
+        newY = rSession.y + actualChange / 2;
       }
     }
-    if (resizeHandle.includes('w')) {
-      const requestedWidth = initialSize.w - dx;
+    if (rSession.handle.includes('w')) {
+      const requestedWidth = rSession.w - dx;
       newWidth = Math.max(minW, requestedWidth);
-      const actualChange = newWidth - initialSize.w;
+      const actualChange = newWidth - rSession.w;
       if (element.anchorX === 'left') {
-        newX = initialSize.x - actualChange;
+        newX = rSession.x - actualChange;
       } else if (element.anchorX === 'center') {
-        newX = initialSize.x - actualChange / 2;
+        newX = rSession.x - actualChange / 2;
       }
     }
-    if (resizeHandle.includes('n')) {
-      const requestedHeight = initialSize.h - dy;
+    if (rSession.handle.includes('n')) {
+      const requestedHeight = rSession.h - dy;
       newHeight = Math.max(minH, requestedHeight);
-      const actualChange = newHeight - initialSize.h;
+      const actualChange = newHeight - rSession.h;
       if (element.anchorY === 'top') {
-        newY = initialSize.y - actualChange;
+        newY = rSession.y - actualChange;
       } else if (element.anchorY === 'center') {
-        newY = initialSize.y - actualChange / 2;
+        newY = rSession.y - actualChange / 2;
       }
     }
 
@@ -372,23 +477,14 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
     };
 
     if (onConstrainResize) {
-      patch = onConstrainResize(element, patch, resizeHandle);
+      patch = onConstrainResize(element, patch, rSession.handle);
     }
 
     onUpdate([element.id], patch);
   };
 
   const handleResizeUp = (e: React.PointerEvent) => {
-    if (isResizing) {
-      setIsResizing(false);
-      setResizeHandle(null);
-      try {
-        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {
-        // Ignore
-      }
-      if (onResizeEnd) onResizeEnd();
-    }
+    finishResizeSession(e.currentTarget, e.pointerId);
   };
 
   const commitInlineText = () => {
@@ -533,7 +629,10 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
     textAlign: element.style.textAlign,
     opacity: effectiveOpacity,
     filter: cssFilter || undefined,
-    zIndex: element.style.zIndex ?? 1,
+    zIndex:
+      !isPreviewMode && (isDragging || isResizing)
+        ? Math.max(element.style.zIndex ?? 1, 80)
+        : (element.style.zIndex ?? 1),
     boxShadow: finalBoxShadow,
 
     overflow: 'visible',
@@ -705,9 +804,14 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
       id={`canvas-${selectorId}`}
       ref={elementRef}
       style={style}
+      onDragStart={(e) => {
+        if (!isEditingText) e.preventDefault();
+      }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onLostPointerCapture={handlePointerUp}
       onMouseEnter={() => {
         setIsHovered(true);
         if (isPreviewMode && onTriggerInteraction) {
@@ -995,39 +1099,228 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
             writingMode: element.style.writingMode || 'horizontal-tb',
           }}
         >
-          {element.type === 'media' && element.mediaType === 'image' && (
-            imgError || !element.src ? (
-              <div className="w-full h-full bg-slate-100 border border-slate-200 flex flex-col items-center justify-center text-slate-400 gap-1 p-2 pointer-events-none">
-                <ImageOff size={22} />
-                <span className="text-[11px] text-center truncate max-w-full">
-                  {element.alt || '画像未設定'}
-                </span>
-              </div>
-            ) : (
-              <img
-                src={element.src}
-                alt={element.alt || ''}
-                referrerPolicy="no-referrer"
-                onError={() => setImgError(true)}
-                className="w-full h-full block pointer-events-none"
-                style={{
-                  objectFit: element.style.objectFit || 'cover',
-                  borderRadius: 'inherit',
-                }}
-              />
-            )
+          {element.type === 'media' && (!element.mediaType || element.mediaType === 'image') && (
+            <div className="relative w-full h-full" style={{ borderRadius: 'inherit' }}>
+              {imgError || !element.src ? (
+                <div className="w-full h-full bg-slate-100 border border-slate-200 flex flex-col items-center justify-center text-slate-400 gap-1 p-2 pointer-events-none select-none">
+                  <ImageOff size={22} />
+                  <span className="text-[11px] text-center truncate max-w-full">
+                    {element.alt || '画像未設定'}
+                  </span>
+                </div>
+              ) : (
+                <img
+                  src={element.src}
+                  alt={element.alt || ''}
+                  draggable={false}
+                  referrerPolicy="no-referrer"
+                  onError={() => setImgError(true)}
+                  className="w-full h-full block pointer-events-none select-none"
+                  style={{
+                    objectFit: element.style.objectFit || 'cover',
+                    borderRadius: 'inherit',
+                  }}
+                />
+              )}
+              {!isPreviewMode && <div className="absolute inset-0 z-20" />}
+            </div>
           )}
 
           {element.type === 'media' && element.mediaType === 'svg' && (
-            <div
-              className="w-full h-full pointer-events-none [&>svg]:w-full [&>svg]:h-full [&>svg]:block"
-              dangerouslySetInnerHTML={{
-                __html:
-                  element.svgContent ||
-                  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>',
-              }}
-              style={{ color: effectiveColor }}
-            />
+            <div className="relative w-full h-full" style={{ borderRadius: 'inherit' }}>
+              <div
+                className="w-full h-full pointer-events-none select-none [&>svg]:w-full [&>svg]:h-full [&>svg]:block"
+                dangerouslySetInnerHTML={{
+                  __html:
+                    element.svgContent ||
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>',
+                }}
+                style={{ color: effectiveColor }}
+              />
+              {!isPreviewMode && <div className="absolute inset-0 z-20" />}
+            </div>
+          )}
+
+          {element.type === 'media' && element.mediaType === 'video' && (() => {
+            const parsedVideo = parseVideoEmbed(element.src, {
+              controls: element.mediaControls !== false,
+              autoplay: Boolean(isPreviewMode && element.mediaAutoplay),
+              loop: Boolean(element.mediaLoop),
+              muted: Boolean(element.mediaMuted || !isPreviewMode),
+            });
+
+            if (parsedVideo.kind === 'iframe') {
+              return (
+                <div
+                  className="relative w-full h-full overflow-hidden bg-slate-950"
+                  style={{ borderRadius: 'inherit' }}
+                >
+                  <iframe
+                    src={parsedVideo.embedUrl}
+                    title={element.alt || '埋め込み動画'}
+                    tabIndex={isPreviewMode ? 0 : -1}
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    className={`w-full h-full block border-0 ${
+                      isPreviewMode ? 'pointer-events-auto' : 'pointer-events-none select-none'
+                    }`}
+                    style={{ borderRadius: 'inherit' }}
+                  />
+                  {!isPreviewMode && (
+                    <div className="absolute inset-0 z-20 flex items-start justify-start p-2.5">
+                      <span className="px-2 py-0.5 rounded bg-slate-950/75 text-[10px] font-medium text-slate-100 border border-white/15 backdrop-blur-xs pointer-events-none select-none">
+                        {parsedVideo.providerLabel}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (parsedVideo.src) {
+              return (
+                <div
+                  className="relative w-full h-full overflow-hidden bg-slate-950"
+                  style={{ borderRadius: 'inherit' }}
+                >
+                  <video
+                    src={parsedVideo.src}
+                    poster={element.poster || undefined}
+                    controls={Boolean(isPreviewMode && element.mediaControls !== false)}
+                    autoPlay={Boolean(isPreviewMode && element.mediaAutoplay)}
+                    loop={Boolean(element.mediaLoop)}
+                    muted={Boolean(element.mediaMuted || !isPreviewMode)}
+                    playsInline
+                    preload="metadata"
+                    draggable={false}
+                    onLoadedMetadata={(ev) => {
+                      const v = ev.currentTarget;
+                      if (!isPreviewMode && !element.poster && v.currentTime === 0) {
+                        try {
+                          v.currentTime = 0.01;
+                        } catch {
+                          // Ignore seek errors on streaming URLs
+                        }
+                      }
+                    }}
+                    className={`w-full h-full block ${
+                      isPreviewMode ? 'pointer-events-auto' : 'pointer-events-none select-none'
+                    }`}
+                    style={{
+                      objectFit: element.style.objectFit || 'cover',
+                      borderRadius: 'inherit',
+                    }}
+                  />
+                  {!isPreviewMode && (
+                    <div className="absolute inset-0 z-20 flex flex-col justify-end">
+                      {element.mediaControls !== false && (
+                        <div className="h-9 px-3 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex items-center gap-2.5 text-[11px] text-white/90 tabular-nums pointer-events-none select-none">
+                          <Play size={13} className="fill-current shrink-0" />
+                          <span>0:00</span>
+                          <div className="flex-1 h-1 rounded-full bg-white/30 overflow-hidden">
+                            <div className="w-1/5 h-full bg-white rounded-full" />
+                          </div>
+                          <Volume2 size={13} className="shrink-0 opacity-85" />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            return (
+              <div
+                className="w-full h-full bg-slate-950 text-slate-200 flex flex-col justify-between relative overflow-hidden select-none"
+                style={{ borderRadius: 'inherit' }}
+              >
+                {element.poster && (
+                  <img
+                    src={element.poster}
+                    alt=""
+                    draggable={false}
+                    className="absolute inset-0 w-full h-full object-cover opacity-55 pointer-events-none select-none"
+                  />
+                )}
+                <div className="relative z-10 flex-1 flex flex-col items-center justify-center gap-2 px-4 text-center pointer-events-none">
+                  <div className="w-11 h-11 rounded-full bg-white/15 border border-white/30 backdrop-blur-xs flex items-center justify-center text-white">
+                    <Play size={18} className="ml-0.5 fill-current" />
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="block text-xs font-semibold text-white">
+                      {element.alt || '動画プレイヤー'}
+                    </span>
+                    <span className="block text-[11px] text-slate-300">
+                      右パネルからMP4選択・YouTube URL入力
+                    </span>
+                  </div>
+                </div>
+                {element.mediaControls !== false && (
+                  <div className="relative z-10 h-8 px-3 bg-gradient-to-t from-black/80 to-transparent flex items-center gap-2.5 text-[10px] text-slate-300 tabular-nums pointer-events-none">
+                    <Film size={12} className="text-slate-300 shrink-0" />
+                    <div className="flex-1 h-1 rounded-full bg-white/25 overflow-hidden">
+                      <div className="w-1/4 h-full bg-indigo-500 rounded-full" />
+                    </div>
+                    <span>0:00</span>
+                  </div>
+                )}
+                {!isPreviewMode && <div className="absolute inset-0 z-20" />}
+              </div>
+            );
+          })()}
+
+          {element.type === 'media' && element.mediaType === 'audio' && (
+            isPreviewMode ? (
+              element.src ? (
+                <audio
+                  src={element.src}
+                  controls={element.mediaControls !== false}
+                  autoPlay={Boolean(element.mediaAutoplay)}
+                  loop={Boolean(element.mediaLoop)}
+                  muted={Boolean(element.mediaMuted)}
+                  preload="metadata"
+                  className="w-full h-full block pointer-events-auto"
+                />
+              ) : null
+            ) : element.mediaControls === false ? (
+              <div
+                className="relative w-full h-full px-3 bg-slate-900/95 text-slate-100 border border-slate-700 flex items-center gap-2.5 select-none overflow-hidden"
+                style={{ borderRadius: 'inherit' }}
+              >
+                <Volume2 size={15} className="text-indigo-400 shrink-0 pointer-events-none" />
+                <span className="text-xs font-medium truncate pointer-events-none">
+                  {element.alt || element.imageName || 'BGM音声（操作バー非表示）'}
+                </span>
+                <div className="absolute inset-0 z-20" />
+              </div>
+            ) : (
+              <div
+                className="relative w-full h-full flex items-center select-none overflow-hidden"
+                style={{ borderRadius: 'inherit' }}
+              >
+                <div className="w-full h-full max-h-[54px] px-3.5 rounded-full bg-slate-100 border border-slate-300/90 text-slate-800 flex items-center gap-3 pointer-events-none shadow-2xs">
+                  <div className="w-7 h-7 rounded-full bg-white border border-slate-200/90 flex items-center justify-center text-slate-800 shrink-0">
+                    <Play size={12} className="ml-0.5 fill-current" />
+                  </div>
+                  <span className="text-[11px] font-mono text-slate-600 tabular-nums shrink-0">
+                    0:00
+                  </span>
+                  <div className="flex-1 min-w-[36px] flex flex-col justify-center gap-1">
+                    <div className="w-full h-1.5 rounded-full bg-slate-300 overflow-hidden">
+                      <div className="w-1/4 h-full bg-slate-700 rounded-full" />
+                    </div>
+                  </div>
+                  {element.width >= 260 && (
+                    <span className="text-[11px] text-slate-500 truncate max-w-[110px]">
+                      {element.src ? element.alt || element.imageName || '音声' : '音声未設定'}
+                    </span>
+                  )}
+                  <Volume2 size={14} className="text-slate-600 shrink-0" />
+                </div>
+                <div className="absolute inset-0 z-20" />
+              </div>
+            )
           )}
 
           {canInlineEditText && isEditingText ? (
@@ -1133,24 +1426,32 @@ const CanvasElement: React.FC<CanvasElementProps> = ({
             onPointerDown={(e) => handleResizeStart(e, 'nw')}
             onPointerMove={handleResizeMove}
             onPointerUp={handleResizeUp}
+            onPointerCancel={handleResizeUp}
+            onLostPointerCapture={handleResizeUp}
           />
           <div
             style={handleStyle('ne')}
             onPointerDown={(e) => handleResizeStart(e, 'ne')}
             onPointerMove={handleResizeMove}
             onPointerUp={handleResizeUp}
+            onPointerCancel={handleResizeUp}
+            onLostPointerCapture={handleResizeUp}
           />
           <div
             style={handleStyle('sw')}
             onPointerDown={(e) => handleResizeStart(e, 'sw')}
             onPointerMove={handleResizeMove}
             onPointerUp={handleResizeUp}
+            onPointerCancel={handleResizeUp}
+            onLostPointerCapture={handleResizeUp}
           />
           <div
             style={handleStyle('se')}
             onPointerDown={(e) => handleResizeStart(e, 'se')}
             onPointerMove={handleResizeMove}
             onPointerUp={handleResizeUp}
+            onPointerCancel={handleResizeUp}
+            onLostPointerCapture={handleResizeUp}
           />
         </>
       )}

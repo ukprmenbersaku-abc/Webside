@@ -1,4 +1,5 @@
 import { EditorElement, ElementStyle, HtmlTagName, Page } from '../types';
+import { isIframeVideoSource, parseVideoEmbed } from './mediaUtils';
 
 export interface BoxSides {
   top: number;
@@ -110,7 +111,7 @@ export function buildCssFilterString(style: ElementStyle): string {
 }
 
 export function getDefaultTagForElement(
-  el: Pick<EditorElement, 'type' | 'link' | 'mediaType'>
+  el: Pick<EditorElement, 'type' | 'link' | 'mediaType' | 'src'>
 ): HtmlTagName {
   switch (el.type) {
     case 'text':
@@ -118,7 +119,10 @@ export function getDefaultTagForElement(
     case 'button':
       return el.link ? 'a' : 'button';
     case 'media':
-      return el.mediaType === 'svg' ? 'div' : 'img';
+      if (el.mediaType === 'svg') return 'div';
+      if (el.mediaType === 'video') return isIframeVideoSource(el.src) ? 'iframe' : 'video';
+      if (el.mediaType === 'audio') return 'audio';
+      return 'img';
     case 'navigation':
       return 'nav';
     case 'divider':
@@ -133,7 +137,12 @@ export function getDefaultTagForElement(
 
 export function getEffectiveTag(el: EditorElement): HtmlTagName {
   if (el.type === 'navigation') return el.tagName === 'header' ? 'header' : 'nav';
-  if (el.type === 'media') return el.mediaType === 'svg' ? 'div' : 'img';
+  if (el.type === 'media') {
+    if (el.mediaType === 'svg') return 'div';
+    if (el.mediaType === 'video') return isIframeVideoSource(el.src) ? 'iframe' : 'video';
+    if (el.mediaType === 'audio') return 'audio';
+    return 'img';
+  }
   if (el.type === 'divider') return 'hr';
   if (el.type === 'button' && el.link) return 'a';
   return el.tagName || getDefaultTagForElement(el);
@@ -177,6 +186,24 @@ export function getElementHumanSummary(el: EditorElement): ElementHumanSummary {
     case 'media': {
       const altText = (el.alt || el.imageName || '').trim();
       const shortAlt = altText.length > 14 ? `${altText.slice(0, 14)}…` : altText;
+      if (el.mediaType === 'video') {
+        const parsed = parseVideoEmbed(el.src);
+        const videoPreview = shortAlt
+          ? `「${shortAlt}」`
+          : parsed.kind === 'iframe'
+            ? `(${parsed.providerLabel})`
+            : '';
+        return {
+          kindLabel: parsed.kind === 'iframe' ? '埋め込み動画' : '動画',
+          previewText: videoPreview,
+        };
+      }
+      if (el.mediaType === 'audio') {
+        return {
+          kindLabel: '音声プレイヤー',
+          previewText: shortAlt ? `「${shortAlt}」` : '',
+        };
+      }
       return {
         kindLabel: el.mediaType === 'svg' ? '図形・SVG' : '画像',
         previewText: shortAlt ? `「${shortAlt}」` : '',
@@ -1140,7 +1167,9 @@ export function computeMobileFlowLayout(
     const { el, bandIdx, colIdx } = entry;
     const currBox = boxesMap.get(el.id)!.borderBox;
     const isFullBleedMedia =
-      el.type === 'media' && el.mediaType === 'image' && currBox.width >= canvasWidth * 0.92;
+      el.type === 'media' &&
+      (!el.mediaType || el.mediaType === 'image' || el.mediaType === 'video') &&
+      currBox.width >= canvasWidth * 0.92;
 
     let marginTopPx = 0;
     if (idx === 0) {

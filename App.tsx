@@ -40,6 +40,7 @@ import {
   shouldPreventOverlap,
 } from './utils/boxModel';
 import { downloadBundle, generateSiteFiles } from './utils/codeGenerator';
+import { getSampleAudioDataUri } from './utils/mediaUtils';
 import { SITE_TEMPLATES, cloneTemplatePages } from './utils/templates';
 
 const CANVAS_WIDTH = 1280;
@@ -116,6 +117,8 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<Page[][]>([initialPages]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const isRestoringHistoryRef = useRef(false);
+  const pagesRef = useRef<Page[]>(pages);
+  pagesRef.current = pages;
 
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -428,6 +431,8 @@ const App: React.FC = () => {
     const num = idCounterRef.current++;
     const rawId = `el-${Date.now().toString(36)}-${num}`;
     const isHeading = type === 'text' && subType === 'heading';
+    const isVideoMedia = type === 'media' && subType === 'video';
+    const isAudioMedia = type === 'media' && subType === 'audio';
 
     const prefixMap: Record<ElementType, string> = {
       text: isHeading ? 'heading' : 'text',
@@ -435,7 +440,7 @@ const App: React.FC = () => {
       circle: 'circle',
       divider: 'divider',
       button: 'button',
-      media: 'image',
+      media: isVideoMedia ? 'video' : isAudioMedia ? 'audio' : 'image',
       navigation: 'navbar',
     };
     const htmlId = `${prefixMap[type]}-${num}`;
@@ -447,6 +452,11 @@ const App: React.FC = () => {
     }
 
     const defaultInk = isDarkCanvas ? '#F4F4F0' : '#0F172A';
+    const maxContentZ = elements.reduce((max, el) => {
+      if (el.style.position === 'fixed' || el.type === 'navigation') return max;
+      return Math.max(max, el.style.zIndex ?? 1);
+    }, 1);
+    const defaultZIndex = elements.length === 0 ? 1 : maxContentZ + 1;
 
     const newElement: EditorElement = {
       id: rawId,
@@ -461,9 +471,13 @@ const App: React.FC = () => {
               ? 'button'
               : type === 'navigation'
                 ? 'nav'
-                : type === 'media'
-                  ? 'img'
-                  : 'div',
+                : isVideoMedia
+                  ? 'video'
+                  : isAudioMedia
+                    ? 'audio'
+                    : type === 'media'
+                      ? 'img'
+                      : 'div',
       type,
       x: 120,
       y: spawnY,
@@ -519,6 +533,7 @@ const App: React.FC = () => {
         fontWeight: isHeading ? '700' : type === 'button' ? '600' : '400',
         lineHeight: isHeading ? 1.3 : 1.6,
         textAlign: type === 'button' ? 'center' : 'left',
+        zIndex: defaultZIndex,
         boxSizing: 'border-box',
       },
     };
@@ -527,13 +542,43 @@ const App: React.FC = () => {
       newElement.width = 120;
       newElement.height = 120;
     } else if (type === 'media') {
-      newElement.mediaType = 'image';
-      newElement.src = DEFAULT_SVG_PLACEHOLDER;
-      newElement.alt = 'サンプル画像';
-      newElement.width = 320;
-      newElement.height = 220;
-      newElement.style.objectFit = 'cover';
-      newElement.style.borderRadius = 4;
+      if (isVideoMedia) {
+        newElement.mediaType = 'video';
+        newElement.src = '';
+        newElement.poster = undefined;
+        newElement.alt = '紹介ムービー';
+        newElement.mediaControls = true;
+        newElement.mediaAutoplay = false;
+        newElement.mediaLoop = false;
+        newElement.mediaMuted = false;
+        newElement.width = 480;
+        newElement.height = 270;
+        newElement.style.backgroundColor = '#0F172A';
+        newElement.style.objectFit = 'cover';
+        newElement.style.borderRadius = 6;
+        newElement.style.overflow = 'hidden';
+      } else if (isAudioMedia) {
+        newElement.mediaType = 'audio';
+        newElement.src = getSampleAudioDataUri();
+        newElement.imageName = 'sample-audio.wav';
+        newElement.alt = 'サンプル音声';
+        newElement.mediaControls = true;
+        newElement.mediaAutoplay = false;
+        newElement.mediaLoop = false;
+        newElement.mediaMuted = false;
+        newElement.width = 380;
+        newElement.height = 54;
+        newElement.style.backgroundColor = 'transparent';
+        newElement.style.borderRadius = 0;
+      } else {
+        newElement.mediaType = 'image';
+        newElement.src = DEFAULT_SVG_PLACEHOLDER;
+        newElement.alt = 'サンプル画像';
+        newElement.width = 320;
+        newElement.height = 220;
+        newElement.style.objectFit = 'cover';
+        newElement.style.borderRadius = 4;
+      }
     } else if (type === 'navigation') {
       newElement.navType = (subType as 'horizontal' | 'hamburger') || 'horizontal';
       newElement.tagName = newElement.navType === 'horizontal' ? 'header' : 'nav';
@@ -793,8 +838,10 @@ const App: React.FC = () => {
         { pos: pageHeight, variant: 'align' },
       ];
 
+      const movingIds = selectedIds.includes(id) ? selectedIds : [id];
+
       elements.forEach((other) => {
-        if (selectedIds.includes(other.id)) return;
+        if (movingIds.includes(other.id)) return;
         const otherGeo = getElementBoxes(other, CANVAS_WIDTH, pageHeight);
         xTargets.push(
           { pos: otherGeo.borderBox.left, variant: 'align' },
@@ -866,7 +913,7 @@ const App: React.FC = () => {
         snappedX,
         snappedY,
         elements,
-        selectedIds.length > 0 ? selectedIds : [el.id],
+        movingIds,
         CANVAS_WIDTH,
         pageHeight
       );
@@ -883,7 +930,7 @@ const App: React.FC = () => {
           return {
             ...page,
             elements: page.elements.map((e) => {
-              if ((selectedIds.includes(e.id) || e.id === el.id) && !e.locked) {
+              if (movingIds.includes(e.id) && !e.locked) {
                 return { ...e, x: e.x + finalDx, y: e.y + finalDy };
               }
               return e;
@@ -900,8 +947,8 @@ const App: React.FC = () => {
   const handleDragEnd = useCallback(() => {
     activeGuides.current = [];
     setCollidingIds([]);
-    saveHistory(pages);
-  }, [pages, saveHistory]);
+    saveHistory(pagesRef.current);
+  }, [saveHistory]);
 
   const handleResizeEnd = useCallback(() => {
     setCollidingIds([]);
@@ -1533,7 +1580,9 @@ const App: React.FC = () => {
                     key={`${activePage.id}-${previewReloadKey}`}
                     title="Webside Live HTML Preview"
                     srcDoc={previewSrcDoc}
-                    sandbox="allow-scripts allow-same-origin"
+                    sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                    allowFullScreen
                     className="w-full h-full border-none block"
                     style={{ backgroundColor: pageBg }}
                   />
@@ -1588,7 +1637,7 @@ const App: React.FC = () => {
                         白紙のページが用意できました
                       </h3>
                       <p className="text-xs text-slate-500 leading-relaxed">
-                        左側のバーから「見出し」「文章」「画像」を追加するか、デザイン済みのテンプレートを選んで編集を始められます。
+                        左側のバーから「見出し」「文章」「画像・動画・音声」を追加するか、デザイン済みのテンプレートを選んで編集を始められます。
                       </p>
                       <div className="flex items-center justify-center gap-2.5 pt-1">
                         <button

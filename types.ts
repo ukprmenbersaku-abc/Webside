@@ -29,6 +29,9 @@ export type HtmlTagName =
   | 'button'
   | 'a'
   | 'img'
+  | 'video'
+  | 'audio'
+  | 'iframe'
   | 'nav';
 
 export type BorderSidesMode = 'all' | 'bottom' | 'top' | 'left' | 'right' | 'y';
@@ -135,7 +138,13 @@ export interface EditorElement {
   hiddenByDefault?: boolean;
   content?: string;
   svgContent?: string;
-  mediaType?: 'image' | 'svg';
+  mediaType?: 'image' | 'svg' | 'video' | 'audio';
+  mediaControls?: boolean;
+  mediaAutoplay?: boolean;
+  mediaLoop?: boolean;
+  mediaMuted?: boolean;
+  poster?: string;
+  posterName?: string;
   alt?: string;
   navType?: 'horizontal' | 'hamburger';
   menuItems?: MenuItem[];

@@ -16,6 +16,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Film,
   GripVertical,
   HelpCircle,
   Image as ImageIcon,
@@ -26,6 +27,7 @@ import {
   Trash2,
   Unlock,
   Upload,
+  Volume2,
   X,
   Zap,
 } from 'lucide-react';
@@ -54,6 +56,11 @@ import {
   sanitizeHtmlId,
 } from '../utils/boxModel';
 import { generateElementSnippet } from '../utils/codeGenerator';
+import {
+  extractIframeSrc,
+  getSampleAudioDataUri,
+  parseVideoEmbed,
+} from '../utils/mediaUtils';
 
 interface PropertiesPanelProps {
   elements: EditorElement[];
@@ -233,6 +240,9 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const svgInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
+  const posterInputRef = useRef<HTMLInputElement>(null);
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
 
   // Shadow local state
@@ -845,6 +855,50 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
       };
       reader.readAsDataURL(file);
     }
+    e.target.value = '';
+  };
+
+  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const objectUrl = URL.createObjectURL(file);
+      onUpdate(selectedIds, {
+        src: objectUrl,
+        imageName: file.name,
+        alt: element.alt || file.name.replace(/\.[^.]+$/, ''),
+      });
+    }
+    e.target.value = '';
+  };
+
+  const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const objectUrl = URL.createObjectURL(file);
+      onUpdate(selectedIds, {
+        src: objectUrl,
+        imageName: file.name,
+        alt: file.name.replace(/\.[^.]+$/, ''),
+      });
+    }
+    e.target.value = '';
+  };
+
+  const handlePosterUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          onUpdate(selectedIds, {
+            poster: event.target.result as string,
+            posterName: file.name,
+          });
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
   };
 
   const handleSvgUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -860,6 +914,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
       };
       reader.readAsText(file);
     }
+    e.target.value = '';
   };
 
   const alignElements = (type: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') => {
@@ -1007,7 +1062,82 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   const currentRadiusVal = element.style.borderRadius ?? (element.type === 'circle' ? 50 : 0);
   const hasBorder = (element.style.borderWidth ?? 0) > 0 || element.type === 'divider';
 
-  const isLocalDataImage = Boolean(element.src && element.src.startsWith('data:'));
+  const isLocalDataImage = Boolean(
+    element.src && (element.src.startsWith('data:') || element.src.startsWith('blob:'))
+  );
+
+  const switchMediaMode = (targetMode: 'image' | 'video' | 'audio' | 'svg') => {
+    const curMode = element.mediaType || 'image';
+    if (curMode === targetMode) return;
+
+    const maxLockedOverlayZ = allPageElements.reduce((max, item) => {
+      if (!item.locked || item.style.position === 'fixed' || item.type === 'navigation') return max;
+      return Math.max(max, item.style.zIndex ?? 1);
+    }, 1);
+    const safeMediaZ = Math.max(element.style.zIndex ?? 1, maxLockedOverlayZ + 1);
+
+    if (targetMode === 'video') {
+      onUpdate(selectedIds, {
+        mediaType: 'video',
+        tagName: 'video',
+        src: '',
+        imageName: undefined,
+        poster: element.poster || undefined,
+        alt: element.alt && element.alt !== 'サンプル音声' ? element.alt : '紹介ムービー',
+        mediaControls: element.mediaControls ?? true,
+        height:
+          element.height < 100
+            ? Math.max(180, Math.round((element.width * 9) / 16))
+            : element.height,
+        style: {
+          ...element.style,
+          backgroundColor: '#0F172A',
+          borderRadius: element.style.borderRadius || 6,
+          overflow: 'hidden',
+          zIndex: safeMediaZ,
+        },
+      });
+    } else if (targetMode === 'audio') {
+      onUpdate(selectedIds, {
+        mediaType: 'audio',
+        tagName: 'audio',
+        src: getSampleAudioDataUri(),
+        imageName: 'sample-audio.wav',
+        alt: 'サンプル音声',
+        mediaControls: element.mediaControls ?? true,
+        height: 54,
+        style: {
+          ...element.style,
+          backgroundColor: 'transparent',
+          borderRadius: 0,
+          zIndex: safeMediaZ,
+        },
+      });
+    } else if (targetMode === 'svg') {
+      onUpdate(selectedIds, {
+        mediaType: 'svg',
+        tagName: 'div',
+        height: element.height < 80 ? 120 : element.height,
+        style: {
+          ...element.style,
+          zIndex: safeMediaZ,
+        },
+      });
+    } else {
+      onUpdate(selectedIds, {
+        mediaType: 'image',
+        tagName: 'img',
+        src: curMode === 'audio' ? '' : element.src,
+        imageName: curMode === 'audio' ? undefined : element.imageName,
+        height: element.height < 100 ? 220 : element.height,
+        style: {
+          ...element.style,
+          backgroundColor: 'transparent',
+          zIndex: safeMediaZ,
+        },
+      });
+    }
+  };
 
   // Determine 3-way link mode cleanly so "リンクなし" hides all extra inputs
   const activeLinkMode = element.link
@@ -1316,17 +1446,49 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 </div>
               )}
 
-              {/* Media Content (Visual Thumbnail + Upload — No confusing file paths!) */}
+              {/* Media Content (Image / Video / Audio / SVG) */}
               {element.type === 'media' && (
                 <div className="space-y-3">
+                  {/* 4-Way Media Type Switcher */}
+                  <div>
+                    <FieldLabel label="メディアの種類" />
+                    <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100 rounded-lg text-[11px]">
+                      {(
+                        [
+                          ['image', '画像'],
+                          ['video', '動画'],
+                          ['audio', '音声'],
+                          ['svg', 'SVG'],
+                        ] as const
+                      ).map(([modeVal, modeLabel]) => {
+                        const isCurMode = (element.mediaType || 'image') === modeVal;
+                        return (
+                          <button
+                            key={modeVal}
+                            type="button"
+                            onClick={() => switchMediaMode(modeVal)}
+                            className={`py-1.5 px-1.5 rounded-md font-medium transition-colors whitespace-nowrap shrink-0 ${
+                              isCurMode
+                                ? 'bg-white text-indigo-700 shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            {modeLabel}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   {element.mediaType === 'svg' ? (
                     <div className="space-y-2.5">
                       <button
                         type="button"
                         onClick={() => svgInputRef.current?.click()}
-                        className="flex items-center justify-center gap-1.5 w-full py-2.5 bg-indigo-50 hover:bg-indigo-100/80 rounded-lg border border-indigo-200 transition-colors text-xs font-medium text-indigo-700"
+                        className="flex items-center justify-center gap-1.5 w-full py-2.5 bg-indigo-50 hover:bg-indigo-100/80 rounded-lg border border-indigo-200 transition-colors text-xs font-medium text-indigo-700 whitespace-nowrap shrink-0"
                       >
-                        <Upload size={14} /> パソコンから SVG ファイルを選ぶ
+                        <Upload size={14} />
+                        <span>パソコンから SVG ファイルを選ぶ</span>
                       </button>
                       <input
                         type="file"
@@ -1344,6 +1506,485 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         placeholder="<svg viewBox='0 0 24 24'>...</svg>"
                       />
                     </div>
+                  ) : element.mediaType === 'video' ? (
+                    (() => {
+                      const parsedVideo = parseVideoEmbed(element.src, {
+                        controls: element.mediaControls !== false,
+                        autoplay: false,
+                        loop: Boolean(element.mediaLoop),
+                        muted: true,
+                      });
+                      const isLocalVideo = Boolean(
+                        element.src &&
+                          (element.src.startsWith('blob:') ||
+                            element.src.startsWith('data:') ||
+                            element.src.startsWith('/') ||
+                            element.src.startsWith('./'))
+                      );
+
+                      return (
+                        <div className="space-y-3">
+                          {/* Video Preview & Upload Card */}
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 space-y-2.5">
+                            <div className="h-36 rounded-lg bg-slate-950 overflow-hidden flex items-center justify-center relative">
+                              {parsedVideo.kind === 'iframe' ? (
+                                <iframe
+                                  src={parsedVideo.embedUrl}
+                                  title={element.alt || '動画プレビュー'}
+                                  referrerPolicy="strict-origin-when-cross-origin"
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                  className="w-full h-full border-0 block"
+                                />
+                              ) : parsedVideo.src ? (
+                                <video
+                                  src={parsedVideo.src}
+                                  poster={element.poster || undefined}
+                                  controls
+                                  muted
+                                  playsInline
+                                  preload="metadata"
+                                  onLoadedMetadata={(ev) => {
+                                    const v = ev.currentTarget;
+                                    if (!element.poster && v.currentTime === 0) {
+                                      try {
+                                        v.currentTime = 0.01;
+                                      } catch {
+                                        // Ignore seek errors on streaming media
+                                      }
+                                    }
+                                  }}
+                                  className="w-full h-full object-contain block"
+                                />
+                              ) : (
+                                <div className="flex flex-col items-center gap-1.5 text-slate-400 px-3 text-center">
+                                  <Film size={22} />
+                                  <span className="text-[11px]">
+                                    動画ファイルを選ぶか、YouTube URLを入力してください
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            {isLocalVideo && element.imageName && (
+                              <div className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-white border border-slate-200 text-[11px]">
+                                <span className="text-slate-700 truncate font-medium">
+                                  {element.imageName}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onUpdate(selectedIds, { src: '', imageName: undefined })
+                                  }
+                                  className="text-slate-400 hover:text-red-600 whitespace-nowrap shrink-0"
+                                >
+                                  クリア
+                                </button>
+                              </div>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => videoInputRef.current?.click()}
+                              className="flex items-center justify-center gap-1.5 w-full py-2 bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors text-xs font-medium text-white whitespace-nowrap shrink-0"
+                            >
+                              <Upload size={14} />
+                              <span>パソコンから動画を選ぶ (MP4 / WebM)</span>
+                            </button>
+                            <input
+                              type="file"
+                              ref={videoInputRef}
+                              className="hidden"
+                              accept="video/mp4,video/webm,video/ogg,video/quicktime,video/*"
+                              onChange={handleVideoUpload}
+                            />
+                          </div>
+
+                          {/* YouTube / Vimeo / Direct Video URL Input */}
+                          <div className="space-y-1.5">
+                            <FieldLabel
+                              label="YouTube・Vimeo・動画URL"
+                              spec="src / iframe"
+                              helpText="YouTubeやVimeoの視聴ページURL、共有の埋め込みコード（<iframe>）、またはWeb上の .mp4 アドレスをそのまま貼り付けできます。"
+                            />
+                            <input
+                              type="text"
+                              className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                              value={isLocalVideo ? '' : element.src || ''}
+                              onChange={(e) => {
+                                const cleanedUrl = extractIframeSrc(e.target.value);
+                                onUpdate(selectedIds, {
+                                  src: cleanedUrl,
+                                  imageName: undefined,
+                                });
+                              }}
+                              placeholder={
+                                isLocalVideo
+                                  ? '選択中の動画を使用中（URL入力で切り替え）'
+                                  : 'https://www.youtube.com/watch?v=... または .mp4 URL'
+                              }
+                            />
+                            {parsedVideo.kind === 'iframe' && (
+                              <p className="text-[11px] text-indigo-600">
+                                {parsedVideo.providerLabel}の埋め込みプレイヤーとして自動変換されました
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Playback Options */}
+                          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2">
+                            <span className="text-[11px] font-semibold text-slate-700 block">
+                              再生オプション
+                            </span>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                              <span className="text-xs text-slate-700">
+                                操作バー・音量ボタンを表示
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={element.mediaControls !== false}
+                                onChange={(e) =>
+                                  onUpdate(selectedIds, { mediaControls: e.target.checked })
+                                }
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                              <div>
+                                <span className="text-xs text-slate-700 block">
+                                  ページを開いたら自動再生
+                                </span>
+                                <span className="text-[10px] text-slate-500">
+                                  ブラウザ仕様に合わせて自動で消音になります
+                                </span>
+                              </div>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(element.mediaAutoplay)}
+                                onChange={(e) =>
+                                  onUpdate(selectedIds, {
+                                    mediaAutoplay: e.target.checked,
+                                    ...(e.target.checked ? { mediaMuted: true } : {}),
+                                  })
+                                }
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                              <span className="text-xs text-slate-700">繰り返しループ再生</span>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(element.mediaLoop)}
+                                onChange={(e) =>
+                                  onUpdate(selectedIds, { mediaLoop: e.target.checked })
+                                }
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                              <span className="text-xs text-slate-700">最初から消音（ミュート）</span>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(element.mediaMuted || element.mediaAutoplay)}
+                                onChange={(e) =>
+                                  onUpdate(selectedIds, { mediaMuted: e.target.checked })
+                                }
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                              />
+                            </label>
+                          </div>
+
+                          {parsedVideo.kind === 'native' && (
+                            <div>
+                              <FieldLabel label="枠に対する映像の収め方" spec="object-fit" />
+                              <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-lg">
+                                <button
+                                  type="button"
+                                  onClick={() => updateStyle({ objectFit: 'cover' })}
+                                  className={`py-1.5 px-2 rounded-md text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                                    (element.style.objectFit || 'cover') === 'cover'
+                                      ? 'bg-white text-slate-900 shadow-xs'
+                                      : 'text-slate-600 hover:text-slate-900'
+                                  }`}
+                                >
+                                  枠いっぱいにフィット
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => updateStyle({ objectFit: 'contain' })}
+                                  className={`py-1.5 px-2 rounded-md text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                                    element.style.objectFit === 'contain'
+                                      ? 'bg-white text-slate-900 shadow-xs'
+                                      : 'text-slate-600 hover:text-slate-900'
+                                  }`}
+                                >
+                                  切らずに全体を表示
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Poster & Title Accordion */}
+                          <div className="pt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setShowMediaAdvanced((v) => !v)}
+                              className="w-full flex items-center justify-between py-1 text-[11px] text-slate-500 hover:text-slate-800"
+                            >
+                              <span>動画タイトル・表紙サムネイル（poster）設定</span>
+                              {showMediaAdvanced ? (
+                                <ChevronUp size={13} />
+                              ) : (
+                                <ChevronDown size={13} />
+                              )}
+                            </button>
+                            {showMediaAdvanced && (
+                              <div className="pt-2 space-y-2.5">
+                                <div>
+                                  <FieldLabel
+                                    label="動画のタイトル・説明"
+                                    spec={parsedVideo.kind === 'iframe' ? 'title' : 'aria-label'}
+                                  />
+                                  <input
+                                    type="text"
+                                    className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                                    value={element.alt || ''}
+                                    onChange={(e) =>
+                                      onUpdate(selectedIds, { alt: e.target.value })
+                                    }
+                                    placeholder="例: 客室露天風呂のご案内ムービー"
+                                  />
+                                </div>
+                                {parsedVideo.kind === 'native' && (
+                                  <div className="space-y-1.5">
+                                    <FieldLabel
+                                      label="再生前の表紙サムネイル画像"
+                                      spec="poster"
+                                    />
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => posterInputRef.current?.click()}
+                                        className="flex-1 py-1.5 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                                      >
+                                        <ImageIcon size={13} />
+                                        <span>表紙画像を選ぶ</span>
+                                      </button>
+                                      {element.poster && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            onUpdate(selectedIds, {
+                                              poster: undefined,
+                                              posterName: undefined,
+                                            })
+                                          }
+                                          className="py-1.5 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs text-slate-500 hover:text-red-600 whitespace-nowrap shrink-0"
+                                        >
+                                          解除
+                                        </button>
+                                      )}
+                                    </div>
+                                    <input
+                                      type="file"
+                                      ref={posterInputRef}
+                                      className="hidden"
+                                      accept="image/*"
+                                      onChange={handlePosterUpload}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {onEnterPreview && (
+                            <button
+                              type="button"
+                              onClick={onEnterPreview}
+                              className="w-full py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100/80 border border-indigo-200 text-indigo-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                            >
+                              <Eye size={13} />
+                              <span>実画面プレビューで再生を確認</span>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()
+                  ) : element.mediaType === 'audio' ? (
+                    (() => {
+                      const isLocalAudio = Boolean(
+                        element.src &&
+                          (element.src.startsWith('blob:') ||
+                            element.src.startsWith('data:') ||
+                            element.src.startsWith('/') ||
+                            element.src.startsWith('./'))
+                      );
+
+                      return (
+                        <div className="space-y-3">
+                          {/* Live Audio Test Player & Upload Card */}
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Volume2 size={14} className="text-indigo-600 shrink-0" />
+                                <span className="text-xs font-medium text-slate-800 truncate">
+                                  {element.imageName || element.alt || '音声プレイヤー'}
+                                </span>
+                              </div>
+                              {element.imageName !== 'sample-audio.wav' && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onUpdate(selectedIds, {
+                                      src: getSampleAudioDataUri(),
+                                      imageName: 'sample-audio.wav',
+                                      alt: 'サンプル音声',
+                                    })
+                                  }
+                                  className="text-[11px] text-slate-400 hover:text-indigo-600 whitespace-nowrap shrink-0"
+                                >
+                                  サンプル音に戻す
+                                </button>
+                              )}
+                            </div>
+
+                            {element.src && (
+                              <audio
+                                src={element.src}
+                                controls
+                                preload="metadata"
+                                className="w-full h-9 block"
+                              />
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => audioInputRef.current?.click()}
+                              className="flex items-center justify-center gap-1.5 w-full py-2 bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors text-xs font-medium text-white whitespace-nowrap shrink-0"
+                            >
+                              <Upload size={14} />
+                              <span>パソコンから音声を選ぶ (MP3 / WAV / M4A)</span>
+                            </button>
+                            <input
+                              type="file"
+                              ref={audioInputRef}
+                              className="hidden"
+                              accept="audio/mpeg,audio/wav,audio/ogg,audio/mp4,audio/aac,audio/*"
+                              onChange={handleAudioUpload}
+                            />
+                          </div>
+
+                          {/* Direct Audio URL Input */}
+                          <div>
+                            <FieldLabel
+                              label="Web上の音声アドレス (URL)"
+                              spec="src"
+                              helpText="外部サーバーにある .mp3 / .wav / .ogg ファイルのURLを直接指定することもできます。"
+                            />
+                            <input
+                              type="text"
+                              className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                              value={isLocalAudio ? '' : element.src || ''}
+                              onChange={(e) =>
+                                onUpdate(selectedIds, {
+                                  src: e.target.value.trim(),
+                                  imageName: undefined,
+                                })
+                              }
+                              placeholder={
+                                isLocalAudio
+                                  ? '選択中の音源を使用中（URL入力で切り替え）'
+                                  : 'https://example.com/bgm.mp3'
+                              }
+                            />
+                          </div>
+
+                          {/* Audio Playback Options */}
+                          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2">
+                            <span className="text-[11px] font-semibold text-slate-700 block">
+                              再生オプション
+                            </span>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                              <div>
+                                <span className="text-xs text-slate-700 block">
+                                  再生プレイヤーバーを表示
+                                </span>
+                                <span className="text-[10px] text-slate-500">
+                                  オフにすると画面にバーを出さないBGM設定になります
+                                </span>
+                              </div>
+                              <input
+                                type="checkbox"
+                                checked={element.mediaControls !== false}
+                                onChange={(e) =>
+                                  onUpdate(selectedIds, { mediaControls: e.target.checked })
+                                }
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer shrink-0"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                              <span className="text-xs text-slate-700">
+                                繰り返しループ再生（BGM向け）
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(element.mediaLoop)}
+                                onChange={(e) =>
+                                  onUpdate(selectedIds, { mediaLoop: e.target.checked })
+                                }
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                              <span className="text-xs text-slate-700">
+                                ページを開いたら自動再生を試みる
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(element.mediaAutoplay)}
+                                onChange={(e) =>
+                                  onUpdate(selectedIds, { mediaAutoplay: e.target.checked })
+                                }
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                              <span className="text-xs text-slate-700">初期状態で消音にする</span>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(element.mediaMuted)}
+                                onChange={(e) =>
+                                  onUpdate(selectedIds, { mediaMuted: e.target.checked })
+                                }
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                              />
+                            </label>
+                          </div>
+
+                          <div>
+                            <FieldLabel label="音声のタイトル・説明" spec="aria-label" />
+                            <input
+                              type="text"
+                              className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 outline-none"
+                              value={element.alt || ''}
+                              onChange={(e) => onUpdate(selectedIds, { alt: e.target.value })}
+                              placeholder="例: 渓谷のせせらぎ環境音"
+                            />
+                          </div>
+
+                          {onEnterPreview && (
+                            <button
+                              type="button"
+                              onClick={onEnterPreview}
+                              className="w-full py-2 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100/80 border border-indigo-200 text-indigo-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                            >
+                              <Eye size={13} />
+                              <span>実画面プレビューで再生を確認</span>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()
                   ) : (
                     <div className="space-y-3">
                       {/* Visual Thumbnail Preview Card */}
@@ -1363,7 +2004,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => fileInputRef.current?.click()}
-                          className="flex items-center justify-center gap-1.5 w-full py-2 bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors text-xs font-medium text-white"
+                          className="flex items-center justify-center gap-1.5 w-full py-2 bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors text-xs font-medium text-white whitespace-nowrap shrink-0"
                         >
                           <Upload size={14} />
                           <span>パソコンから画像を選んで変更</span>
@@ -1419,53 +2060,29 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                           placeholder="例: 淹れたてのハンドドリップ珈琲"
                         />
                       </div>
-                    </div>
-                  )}
 
-                  {/* Quiet Accordion for Web Image URL or SVG Mode Switch */}
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowMediaAdvanced((v) => !v)}
-                      className="w-full flex items-center justify-between py-1 text-[11px] text-slate-500 hover:text-slate-800"
-                    >
-                      <span>Web上の画像URL入力・SVG図形への切り替え</span>
-                      {showMediaAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                    </button>
-                    {showMediaAdvanced && (
-                      <div className="pt-2 space-y-2.5">
-                        <div className="flex gap-1 p-1 bg-slate-100 rounded-lg text-xs">
-                          <button
-                            type="button"
-                            className={`flex-1 py-1 rounded-md font-medium transition-colors ${
-                              element.mediaType === 'image'
-                                ? 'bg-white text-slate-900 shadow-xs'
-                                : 'text-slate-500'
-                            }`}
-                            onClick={() => onUpdate(selectedIds, { mediaType: 'image' })}
-                          >
-                            写真・画像
-                          </button>
-                          <button
-                            type="button"
-                            className={`flex-1 py-1 rounded-md font-medium transition-colors ${
-                              element.mediaType === 'svg'
-                                ? 'bg-white text-slate-900 shadow-xs'
-                                : 'text-slate-500'
-                            }`}
-                            onClick={() => onUpdate(selectedIds, { mediaType: 'svg' })}
-                          >
-                            SVG図形
-                          </button>
-                        </div>
-                        {element.mediaType !== 'svg' && (
-                          <div>
-                            <FieldLabel label="Web上の画像アドレス (URL)" />
+                      {/* Quiet Accordion for Web Image URL */}
+                      <div className="pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setShowMediaAdvanced((v) => !v)}
+                          className="w-full flex items-center justify-between py-1 text-[11px] text-slate-500 hover:text-slate-800"
+                        >
+                          <span>Web上の画像アドレス (URL) を直接入力</span>
+                          {showMediaAdvanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                        </button>
+                        {showMediaAdvanced && (
+                          <div className="pt-2">
                             <input
                               type="text"
                               className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-mono"
                               value={isLocalDataImage ? '' : element.src || ''}
-                              onChange={(e) => onUpdate(selectedIds, { src: e.target.value })}
+                              onChange={(e) =>
+                                onUpdate(selectedIds, {
+                                  src: e.target.value,
+                                  imageName: undefined,
+                                })
+                              }
                               placeholder={
                                 isLocalDataImage
                                   ? 'アップロード画像を使用中（URLで上書き可）'
@@ -1475,8 +2092,8 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                           </div>
                         )}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2445,11 +3062,13 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 )}
               </div>
 
-              {/* Media Photo Tone Filter */}
-              {element.type === 'media' && (
+              {/* Media Photo/Video Tone Filter */}
+              {element.type === 'media' && element.mediaType !== 'audio' && (
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-slate-800">写真の明るさ・色味</span>
+                    <span className="text-xs font-medium text-slate-800">
+                      {element.mediaType === 'video' ? '映像の明るさ・色味' : '写真の明るさ・色味'}
+                    </span>
                     <button
                       type="button"
                       onClick={() =>
@@ -2633,12 +3252,28 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               </div>
             ) : element.type !== 'divider' ? (
               <>
-                {/* 1. Link Navigation */}
-                <section className="space-y-3 pb-4 border-b border-slate-200">
-                  <FieldLabel
-                    label="クリックでページ・URLへ移動"
-                    helpText="ボタンや画像をクリックしたときに、作成中の別ページや外部Webサイトへ移動させます。"
-                  />
+                {/* 1. Link Navigation (Skipped on interactive video/audio players to preserve play controls) */}
+                {element.type === 'media' &&
+                (element.mediaType === 'video' || element.mediaType === 'audio') ? (
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      動画・音声の自動再生やループ再生などの動作は「内容・余白」タブで設定できます。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setElementTab('basic')}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                    >
+                      <span>再生オプションを開く</span>
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <section className="space-y-3 pb-4 border-b border-slate-200">
+                    <FieldLabel
+                      label="クリックでページ・URLへ移動"
+                      helpText="ボタンや画像をクリックしたときに、作成中の別ページや外部Webサイトへ移動させます。"
+                    />
 
                   <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-lg text-xs">
                     <button
@@ -2750,7 +3385,8 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                       </label>
                     </div>
                   )}
-                </section>
+                  </section>
+                )}
 
                 {/* 2. Click Interaction (Open/Close Drawer, Smooth Scroll, etc.) */}
                 <section className="space-y-3 pb-4 border-b border-slate-200">
@@ -2924,7 +3560,9 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               {onEnterPreview &&
                 (Boolean(element.link) ||
                   (element.interaction?.action && element.interaction.action !== 'none') ||
-                  element.style.position === 'fixed') && (
+                  element.style.position === 'fixed' ||
+                  (element.type === 'media' &&
+                    (element.mediaType === 'video' || element.mediaType === 'audio'))) && (
                   <button
                     type="button"
                     onClick={onEnterPreview}
